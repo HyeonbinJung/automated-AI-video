@@ -1,0 +1,13 @@
+{
+  "name": "extriver-shorts-studio",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["apps/server", "apps/web"],
+  "scripts": {
+    "dev": "concurrently -k -n API,WEB -c cyan,magenta \"npm run dev -w @extriver/server\" \"npm run dev -w @extriver/web\"",
+    "build": "npm run build -w @extriver/web",
+    "start": "npm run start -w @extriver/server",
+    "test": "node --test apps/server/tests/*.test.js"
+  },
+  "devDependencies": { "concurrently": "^9.2.0" }
+}
