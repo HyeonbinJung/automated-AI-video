@@ -21,8 +21,7 @@ const M = {
   characterFirst: { ko: '캐릭터를 먼저 정해주세요.', en: 'Please set the character first.', hi: 'पहले किरदार तय करें।' },
   storyboardFirst: { ko: '스토리보드를 먼저 만들어주세요.', en: 'Please make the storyboard first.', hi: 'पहले स्टोरीबोर्ड बनाएं।' },
   noScene: { ko: '장면이 없습니다.', en: 'Scene not found.', hi: 'सीन नहीं मिला।' },
-  lowBalance: { ko: '잔액이 부족해요. {label}: {price} · 현재 잔액 {balance}', en: 'Not enough balance. {label}: {price} · balance {balance}', hi: 'बैलेंस कम है। {label}: {price} · बैलेंस {balance}' },
-  scenePay: { ko: '장면 {n} 영상은 결제가 필요해요.', en: 'Scene {n} needs payment to make again.', hi: 'सीन {n} दोबारा बनाने के लिए भुगतान चाहिए।' },
+  lowBalance: { ko: '잔액이 부족해요. {label}에 최대 {price}가 쓰일 수 있어요 · 현재 잔액 {balance}', en: 'Not enough balance. {label} can use up to {price} · balance {balance}', hi: 'बैलेंस कम है। {label} में अधिकतम {price} लग सकते हैं · बैलेंस {balance}' },
   partial: { ko: '일부 장면을 못 만들었어요 — {list}', en: 'Some scenes could not be made — {list}', hi: 'कुछ सीन नहीं बन पाए — {list}' },
   characterFail: { ko: '캐릭터를 만들지 못했어요. 설명을 조금 더 자세히 써주세요.', en: 'Could not create the character. Please describe it in more detail.', hi: 'किरदार नहीं बन पाया। थोड़ा और विस्तार से लिखें।' },
   sceneCountFail: { ko: '장면 수가 맞지 않아요 ({want}개 필요, {got}개). 다시 시도해주세요.', en: 'Wrong number of scenes ({got} of {want}). Please try again.', hi: 'सीन की संख्या गलत है ({want} में से {got})। फिर कोशिश करें।' },
@@ -41,14 +40,18 @@ const M = {
   wVideo: { ko: '장면 영상', en: 'Scene video', hi: 'सीन वीडियो' },
   bCharacter: { ko: '캐릭터 만들기', en: 'Create character', hi: 'किरदार बनाना' },
   bCharacterRedo: { ko: '캐릭터 다시 만들기', en: 'Redo character', hi: 'किरदार दोबारा' },
-  bPackage: { ko: '{n}장면 스토리보드 + 영상', en: '{n}-scene storyboard + videos', hi: '{n} सीन स्टोरीबोर्ड + वीडियो' },
-  bUpgrade: { ko: '{a}→{b}장면 변경 + 스토리보드 다시 짜기', en: 'Upgrade {a}→{b} scenes + new storyboard', hi: '{a}→{b} सीन + नया स्टोरीबोर्ड' },
+  bPackage: { ko: '{n}장면 스토리보드', en: '{n}-scene storyboard', hi: '{n} सीन स्टोरीबोर्ड' },
   bStoryboardRedo: { ko: '스토리보드 다시 짜기', en: 'Redo storyboard', hi: 'स्टोरीबोर्ड दोबारा' },
-  bSceneRedo: { ko: '장면 하나 다시 만들기', en: 'Redo one scene', hi: 'एक सीन दोबारा' },
   bSceneRedoN: { ko: '장면 {n} 다시 만들기', en: 'Redo scene {n}', hi: 'सीन {n} दोबारा' },
-  bRefund: { ko: '환불: {label}', en: 'Refund: {label}', hi: 'रिफ़ंड: {label}' },
   bTopup: { ko: '충전 (테스트)', en: 'Top-up (test)', hi: 'टॉप-अप (टेस्ट)' },
-  refundWhy: { ko: 'AI 비용이 발생하지 않은 실패', en: 'Failed before any AI cost', hi: 'AI लागत से पहले विफल' },
+  bScene: { ko: '장면 {n} 영상', en: 'Scene {n} video', hi: 'सीन {n} वीडियो' },
+  bVideos: { ko: '장면 영상 {n}개', en: '{n} scene videos', hi: '{n} सीन वीडियो' },
+  // usage lines in the bill (one per AI call, cost + markup)
+  uText: { ko: '텍스트 AI · {tokens} 토큰', en: 'Text AI · {tokens} tokens', hi: 'टेक्स्ट AI · {tokens} टोकन' },
+  uCharacter: { ko: '캐릭터 이미지', en: 'Character image', hi: 'किरदार चित्र' },
+  uSheet: { ko: '스토리보드 이미지', en: 'Storyboard image', hi: 'स्टोरीबोर्ड चित्र' },
+  uVideo: { ko: '장면 영상', en: 'Scene video', hi: 'सीन वीडियो' },
+  uOther: { ko: 'AI 사용 ({what})', en: 'AI usage ({what})', hi: 'AI उपयोग ({what})' },
 };
 export function t(lang, key, vars = {}) {
   const m = M[key]; if (!m) return key;

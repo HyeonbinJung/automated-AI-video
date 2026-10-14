@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🎬 Extriver Shorts Studio
+# 🎬 SuperDuper Video
 
 **Automated AI Short-Form Animation Platform — from one story to a finished vertical video**
 
@@ -12,7 +12,7 @@
 <img src="https://img.shields.io/badge/Seedance%201.5%20Pro-1F2937?style=for-the-badge" height="26">
 <img src="https://img.shields.io/badge/FFmpeg-007808?style=for-the-badge&logo=ffmpeg&logoColor=white" height="26">
 
-[Overview](#-overview) · [Features](#-key-features) · [Tech Stack](#-tech-stack) · [Pipeline](#-generation-pipeline) · [Pricing](#-pricing--margin-model) · [Getting Started](#-getting-started) · [Structure](#%EF%B8%8F-project-structure) · [Limitations](#-limitations)
+[Overview](#-overview) · [Features](#-key-features) · [Tech Stack](#-tech-stack) · [Pipeline](#-generation-pipeline) · [Pricing](#-usage-based-credits) · [Getting Started](#-getting-started) · [Structure](#%EF%B8%8F-project-structure) · [Limitations](#-limitations)
 
 </div>
 
@@ -20,9 +20,9 @@
 
 ## 📌 Overview
 
-Extriver Shorts Studio turns a short written story into a vertical (9:16) animated short. The user answers five questions — **story → animation strategy → character → number of scenes → Launch** — and the platform refines the story, designs a consistent character, draws a storyboard, animates every scene and joins them into one MP4.
+SuperDuper Video turns a short written story into a vertical (9:16) animated short. The user answers five questions — **story → animation strategy → character → number of scenes → Launch** — and the platform refines the story, designs a consistent character, draws a storyboard, animates every scene and joins them into one MP4.
 
-The pipeline is built around the cheapest usable models and a **prepaid, never-lose pricing model**: every paid step is charged before it runs, at a price computed from its worst-case provider cost.
+The pipeline is built around the cheapest usable models and **usage-based credits**: every AI call is deducted at its real provider cost + 20 %.
 
 ---
 
@@ -37,7 +37,7 @@ The pipeline is built around the cheapest usable models and a **prepaid, never-l
 | **One-Image Storyboard** | Ten scenes are drawn on a single storyboard sheet and cut into keyframes in the browser |
 | **Scene Video Generation** | Seedance 1.5 Pro image-to-video, 3–7 s per scene, 7 / 10 / 13 scenes |
 | **Per-Scene Redo** | Any single scene can be regenerated with a short instruction |
-| **Prepaid Wallet** | Balance, bill ledger, automatic refunds when a step fails before any AI cost |
+| **Credit Wallet** | Balance and a per-call usage ledger; real provider usage + 20 % is deducted |
 | **Multilingual** | UI and generated content in Korean, English (US / India), Hindi, Spanish, Japanese, Indonesian |
 | **Auto Editor** | Crossfades, burned-in subtitles, optional BGM and logo, final MP4 render |
 | **Advanced Studio** | The original six-stage editor remains available for manual control |
@@ -88,33 +88,32 @@ FFmpeg ── crossfades + subtitles (+ BGM / logo) ──► final MP4
 
 ---
 
-## 💰 Pricing & Margin Model
+## 💰 Usage-Based Credits
 
-Every paid step is **prepaid** from the wallet. Prices are derived in `apps/server/pricing.js` from the **worst-case** cost of each step, so a sale cannot lose money:
+Nothing is prepaid. Every AI call is billed from the provider's **own usage report** — DeepSeek token counts and Kie AI `creditsConsumed` — and deducted from the wallet the moment it is recorded:
 
-- longest allowed clips (total ≤ scenes × 5 s, 3 s scenes billed as 4 s)
-- DeepSeek at its maximum output tokens, billed as cache-miss input
-- +10 % provider price buffer and +10 % exchange-rate buffer
-- 10 % VAT and 3.3 % card fee removed before the margin is measured
-- target operating margin: **20 %**
+```text
+credits = ceil(provider cost in USD × KRW_PER_USD × (1 + MARKUP))      1 credit = ₩1
+```
 
-| Item | Price (KRW, VAT incl.) | Worst-case cost | Worst-case margin |
-|---|---|---|---|
-| Create / redo character | ₩100 | ₩14 | 81 % |
-| 7-scene package (storyboard + all videos) | ₩1,000 | ₩630 | 27 % |
-| 10-scene package | ₩1,300 | ₩869 | 23 % |
-| 13-scene package | ₩1,700 | ₩1,163 | 21 % |
-| Redo storyboard | ₩100 – ₩200 | ₩52 – ₩96 | 37 – 44 % |
-| Redo one scene | ₩200 | ₩119 | 31 % |
+`MARKUP` defaults to **20 %** and can be raised in `.env`, never lowered below 20 %. The math is in `apps/server/pricing.js`.
 
-A complete video costs the customer **₩1,100 (7 scenes) – ₩1,800 (13 scenes)** before optional redos.
+| Provider call | Provider cost | What the customer pays (+20 %) |
+|---|---|---|
+| DeepSeek text (story, plan, prompts) | $0.56 / 1M input · $1.68 / 1M output tokens | tokens used × rate × 1.2 |
+| Z-Image character image | $0.004 per image | ₩7 |
+| Seedream 5.0 Flash storyboard sheet (10 scenes) | $0.0162 per sheet | ₩28 |
+| Seedance 1.5 Pro scene video (480p) | $0.00875 per second, 4–12 s per clip | ≈ ₩14.7 per second |
+
+A typical finished video (scenes averaging 5 s) uses about **₩580 (7 scenes) – ₩1,060 (13 scenes)** of credits, plus any redos.
 
 Safety rules:
 
-- A failed step is refunded **only if the providers billed nothing** (DeepSeek token usage and Kie `creditsConsumed` are recorded per project).
-- A failed scene that cost nothing keeps its prepaid credit and can be retried for free; a failed scene that was billed must be redone as a paid scene.
+- Before a step starts, the balance must cover its **worst-case** usage (longest clips, DeepSeek at its output cap); the UI shows these as "up to" amounts. Only real usage is deducted.
+- A call the provider did not bill costs nothing, so there are no refunds to manage.
 - Kie task IDs are saved the moment they are created, so a timeout or server restart resumes the same task instead of paying twice.
 - Characters and storyboards are locked once scene videos exist.
+- The bill lists every AI call (tokens or provider credits, KRW charged) per project.
 
 ---
 
@@ -137,7 +136,7 @@ DEEPSEEK_API_KEY=...
 KIE_API_KEY=...          # https://kie.ai/api-key
 ```
 
-Optional pricing knobs: `KRW_PER_USD`, `FX_BUFFER`, `COST_BUFFER`, `TARGET_MARGIN`, `PG_FEE`, `VAT`. Set `WALLET_DEV_TOPUP=0` once a payment gateway credits the wallet (this disables the test top-up buttons).
+Optional billing knobs: `KRW_PER_USD`, `MARKUP` (≥ 0.2), `DEEPSEEK_USD_PER_M_IN`, `DEEPSEEK_USD_PER_M_OUT`. Set `WALLET_DEV_TOPUP=0` once a payment gateway credits the wallet (this disables the test top-up buttons).
 
 Tests:
 
@@ -157,7 +156,7 @@ extriver-shorts-studio/
 │   │   ├── server.js        # REST API, jobs, simple-mode flow, wallet & billing
 │   │   ├── services.js      # DeepSeek, Kie AI (Z-Image, Seedream, Seedance), spend metering
 │   │   ├── prompts.js       # Strategies, character types, cache-friendly system prompts
-│   │   ├── pricing.js       # Worst-case cost model and customer prices
+│   │   ├── pricing.js       # Provider rates, credits = cost + markup, worst-case estimates
 │   │   ├── i18n.js          # Server messages and content languages
 │   │   ├── editor.js        # FFmpeg render: crossfade, subtitles, BGM, logo
 │   │   ├── paths.js
@@ -176,7 +175,7 @@ extriver-shorts-studio/
 
 ## 🎯 Project Objective
 
-Make short-form animation production simple enough for anyone to finish a video in a few clicks, while keeping unit economics safe: the cheapest viable models, as few paid calls as possible, and prices that cover the worst case.
+Make short-form animation production simple enough for anyone to finish a video in a few clicks, while keeping unit economics safe: the cheapest viable models, as few paid calls as possible, and every call billed at its real cost + 20 %.
 
 ---
 

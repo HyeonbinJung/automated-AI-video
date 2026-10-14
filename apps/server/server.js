@@ -6,10 +6,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {fileURLToPath} from 'node:url';
-import {writeStory,writeSimpleStory,designCharacter,drawCharacter,createStoryboardSheets,setPersist,regenerateHook,createCast,createSceneImage,createSceneVideo,ROOT,uploads,assetFile,mediaUrl} from './services.js';
+import {writeStory,writeSimpleStory,designCharacter,drawCharacter,createStoryboardSheets,setPersist,regenerateHook,createCast,createSceneImage,createSceneVideo,setSpendHook,seedanceSeconds,ROOT,uploads,assetFile,mediaUrl} from './services.js';
 import {renderProject,ffmpegAvailable} from './editor.js';
 import {demoProject,estimateCredits,costCatalog,CHARACTER_TYPES,STRATEGIES,SIMPLE_SCENE_COUNTS,SCENE_SECONDS,SHEET_PANELS,SHEET_COLS,SHEET_ROWS} from './prompts.js';
-import {priceList} from './pricing.js';
+import {estimates,creditsFor,videoCredits,MARKUP,USD,KRW_PER_USD} from './pricing.js';
 import {t,langOf,krw,LANGS} from './i18n.js';
 dotenv.config({path:path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../.env')});
 const app=express();app.use(cors());app.use(express.json({limit:'1mb'}));
@@ -95,45 +95,47 @@ app.post('/api/projects/:id/batch',find,(req,res)=>{
  res.status(202).json({ok:true});
 });
 // ---- simple mode: story → strategy → character → scene count + storyboard → Launch ----
-// Never-lose rules: every paid step is PREPAID from the wallet at a worst-case price (pricing.js); a failed step is
-// refunded only when the providers charged us nothing for it; a timed-out task is resumed, never paid twice.
+// Usage billing: nothing is prepaid. Every AI call is billed from the provider's own usage report (DeepSeek tokens,
+// Kie creditsConsumed) at cost + MARKUP (pricing.js) the moment it is recorded, so a failed call that the provider
+// did not bill costs nothing. Before a step starts, the balance must cover its worst-case estimate.
 const LAUNCH_VIDEO='seedance'; // Seedance 1.5 Pro 480p via Kie AI
 const STORY_MAX=500;
 const L=p=>langOf(p?.lang);
-const LABEL={character:'bCharacter',characterRedo:'bCharacterRedo',package:'bPackage',storyboardRedo:'bStoryboardRedo',sceneRedo:'bSceneRedo'};
-// prices with bill labels in the project's language
-const priced=(n,lang)=>Object.fromEntries(Object.entries(priceList(n)).map(([k,v])=>[k,{...v,label:t(lang,LABEL[k],{n})}]));
 const walletFile=path.join(ROOT,'wallet.json');
 let wallet=fs.existsSync(walletFile)?JSON.parse(fs.readFileSync(walletFile,'utf8')):{balance:0,history:[]};
 const saveWallet=()=>{const t=walletFile+'.tmp';fs.writeFileSync(t,JSON.stringify(wallet,null,2));fs.renameSync(t,walletFile);};
 class PayError extends Error{constructor(m){super(m);this.status=402;}}
-function charge(p,key,label,price){
- if(wallet.balance<price)throw new PayError(t(L(p),'lowBalance',{label,price:krw(price),balance:krw(wallet.balance)}));
- wallet.balance-=price;const e={id:idOf(),project:p.id,key,label,krw:price,at:new Date().toISOString()};
+// the balance must cover the most this step can use; the real amount is taken per call as it happens
+function needBalance(p,label,estimate){
+ if(wallet.balance<estimate)throw new PayError(t(L(p),'lowBalance',{label,price:krw(estimate),balance:krw(wallet.balance)}));
+}
+const USAGE={deepseek:'uText','kie:z-image':'uCharacter','kie:seedream/5-flash-image-to-image':'uSheet','kie:bytedance/seedance-1.5-pro':'uVideo'};
+setSpendHook((p,usd,what,detail)=>{
+ const credits=creditsFor(usd),label=t(L(p),USAGE[what]||'uOther',{tokens:(detail.tokens||0).toLocaleString('en-US'),what});
+ wallet.balance-=credits;const e={id:idOf(),project:p.id,key:what,label,krw:credits,usd:+usd.toFixed(6),...detail,at:new Date().toISOString()};
  wallet.history.unshift(e);wallet.history=wallet.history.slice(0,500);saveWallet();
- (p.bill??=[]).push(e);p.billTotal=p.bill.reduce((a,b)=>a+(b.refunded?0:b.krw),0);return e;
+ (p.bill??=[]).push(e);if(p.bill.length>300)p.bill.splice(0,p.bill.length-300);p.billTotal=(p.billTotal||0)+credits;
+});
+// run a step once the balance covers its estimate; whatever the providers actually bill is deducted as it happens
+function paidJob(p,jobKey,label,estimate,fn){
+ needBalance(p,label,estimate);
+ startJob(p,jobKey,async()=>{try{await fn();}catch(err){update(p);throw err;}});
 }
-function refund(p,e,why){
- if(!e||e.refunded)return;e.refunded=true;e.refundReason=why;wallet.balance+=e.krw;
- wallet.history.unshift({id:idOf(),project:p.id,key:'refund',label:t(L(p),'bRefund',{label:e.label}),krw:-e.krw,at:new Date().toISOString()});saveWallet();
- const own=p.bill?.find(b=>b.id===e.id);if(own){own.refunded=true;own.refundReason=why;}p.billTotal=p.bill.reduce((a,b)=>a+(b.refunded?0:b.krw),0);
-}
-// run a job after charging; refund automatically if it fails before any provider billed us
-function paidJob(p,jobKey,item,fn,onRefund){
- const e=item?charge(p,jobKey,item.label,item.price):null;const before=p.spendUsd||0;
- startJob(p,jobKey,async()=>{try{await fn();}catch(err){if((p.spendUsd||0)<=before){refund(p,e,t(L(p),'refundWhy'));onRefund?.();}update(p);throw err;}});
-}
-const prices=p=>priced(p.sceneCount||p.scenes.length||10,L(p));
+const est=p=>estimates(p.sceneCount||p.scenes.length||10);
+// the most the scenes still missing a video can take (each clip billed as 4-12s)
+const videosLeft=p=>p.scenes.filter(s=>!s.video&&!s.kieTasks?.video).reduce((a,s)=>a+videoCredits(seedanceSeconds(s.duration||5)),0);
 app.get('/api/simple/options',(req,res)=>res.json({
  characters:Object.entries(CHARACTER_TYPES).map(([id,c])=>({id,label:c.label})),
  strategies:Object.entries(STRATEGIES).map(([id,s])=>({id,label:s.label,desc:s.desc})),
  sceneCounts:SIMPLE_SCENE_COUNTS,storyMax:STORY_MAX,panelsPerSheet:SHEET_PANELS,sheetGrid:{cols:SHEET_COLS,rows:SHEET_ROWS},
  video:{model:costCatalog[LAUNCH_VIDEO].name,sceneSeconds:SCENE_SECONDS},
- prices:Object.fromEntries(SIMPLE_SCENE_COUNTS.map(n=>[n,Object.fromEntries(Object.entries(priceList(n)).map(([k,v])=>[k,v.price]))])),
+ prices:Object.fromEntries(SIMPLE_SCENE_COUNTS.map(n=>[n,estimates(n)])),
+ // per billed video second, so the browser can estimate the launch from the real scene lengths
+ billing:{markup:MARKUP,videoSecond:USD.videoSecond*KRW_PER_USD*(1+MARKUP)},
  devTopup:process.env.WALLET_DEV_TOPUP!=='0',languages:Object.keys(LANGS)
 }));
-// owner view: worst-case cost and margin per item (to check the numbers, not shown to customers)
-app.get('/api/simple/pricing',(req,res)=>res.json(Object.fromEntries(SIMPLE_SCENE_COUNTS.map(n=>[n,priceList(n)]))));
+// owner view: provider rates, markup and the worst-case estimates (to check the numbers)
+app.get('/api/simple/pricing',(req,res)=>res.json({krwPerUsd:KRW_PER_USD,markup:MARKUP,usd:USD,estimates:Object.fromEntries(SIMPLE_SCENE_COUNTS.map(n=>[n,estimates(n)]))}));
 app.get('/api/wallet',(req,res)=>res.json({balance:wallet.balance,history:wallet.history.slice(0,50)}));
 // local/dev top-up until a payment gateway is connected (its webhook should credit the wallet the same way)
 app.post('/api/wallet/topup',(req,res)=>{
@@ -153,55 +155,45 @@ app.post('/api/simple/project',(req,res)=>{
  p={id:idOf(),title:String(b.story).trim().split(/\s+/).slice(0,6).join(' ').slice(0,60)||'My short',...f,style:'',sceneCount:0,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),hook:'',hookAlternatives:[],story:'',styleBible:'',characters:[],scenes:[],sheets:[],castImage:null,brandImage:null,bgm:null,render:null,editing:{fade:.25,caption:true,brandPosition:'top-right',bgmVolume:.12},jobs:{},mode:'simple',bill:[],billTotal:0,spendUsd:0};
  db.unshift(p);save();res.status(201).json(p);
 });
-// step 3: DeepSeek designs the character, Z-Image draws it; feedback revises it (each try prepaid)
+// step 3: DeepSeek designs the character, Z-Image draws it; feedback revises it (each try billed by usage)
 app.post('/api/projects/:id/simple/character',find,(req,res)=>guard(res,()=>{
  const p=req.project,{description='',type='',feedback=''}=req.body||{};const err=needKeys(L(p));if(err)return fail(res,err);
  if(!String(description).trim()&&!String(feedback).trim())return fail(res,t(L(p),'describeCharacter'));
  if(busyJob(p))return fail(res,t(L(p),'making'),409);
  if(p.scenes.some(s=>s.video))return fail(res,t(L(p),'lockedAfterVideo'));
  if(type)p.character=String(type).slice(0,200);if(description)p.characterDescription=String(description).slice(0,300);
- const pl=prices(p),item=p.castImage?pl.characterRedo:pl.character;
- paidJob(p,'character',item,async()=>{
+ paidJob(p,'character',t(L(p),p.castImage?'bCharacterRedo':'bCharacter'),est(p).character,async()=>{
   const out=await designCharacter(p,{description:p.characterDescription,feedback:String(feedback).slice(0,300)});
   Object.assign(p,out);p.style=p.styleBible;p.castImage=await drawCharacter(p);
   p.sheets=[];p.scenes=[];p.story='';p.render=null;update(p); // a new character invalidates the old storyboard
  });res.status(202).json({ok:true});
 }));
-// step 4: the package (storyboard once + every scene's first video) is paid here; redoing the storyboard is extra
+// step 4: plan the scenes and draw the storyboard (billed by usage; redoing it is billed the same way)
 app.post('/api/projects/:id/simple/storyboard',find,(req,res)=>guard(res,()=>{
  const p=req.project,n=Number(req.body?.sceneCount);const err=needKeys(L(p));if(err)return fail(res,err);
  if(!SIMPLE_SCENE_COUNTS.includes(n))return fail(res,t(L(p),'pickScenes'));
  if(!p.castImage)return fail(res,t(L(p),'characterFirst'));
  if(busyJob(p))return fail(res,t(L(p),'making'),409);
  if(p.scenes.some(s=>s.video))return fail(res,t(L(p),'lockedAfterVideo'));
- const pl=priced(n,L(p));let item;
- if(!p.packageScenes)item=pl.package;
- else if(n>p.packageScenes)item={label:t(L(p),'bUpgrade',{a:p.packageScenes,b:n}),price:pl.package.price-priceList(p.packageScenes).package.price+pl.storyboardRedo.price};
- else item=pl.storyboardRedo;
- p.sceneCount=n;const prevPackage=p.packageScenes||0;
- paidJob(p,'storyboard',item,async()=>{
-  p.scenes=[];p.sheets=[];p.story='';p.render=null;
+ paidJob(p,'storyboard',t(L(p),p.sheets?.length?'bStoryboardRedo':'bPackage',{n}),estimates(n).storyboard,async()=>{
+  p.sceneCount=n;p.scenes=[];p.sheets=[];p.story='';p.render=null;
   const out=await writeSimpleStory(p,(k,v)=>{p.batchProgress={current:t(L(p),k,v),stage:'story'};update(p);});
   Object.assign(p,out);if(p.animation?.fade!=null)p.editing={...p.editing,fade:Math.max(0,Math.min(.5,Number(p.animation.fade)||0))};
-  p.scenes.forEach(s=>{s.videoCredits=1;}); // each scene's first video is part of the package
   update(p);
   p.sheets=await createStoryboardSheets(p,(k,v)=>{p.batchProgress={current:t(L(p),k,v),stage:'sheet'};update(p);});
   p.batchProgress={current:t(L(p),'pSheetDone'),stage:'ready'};update(p);
- },()=>{p.packageScenes=prevPackage;}); // refunded: the package was not bought after all
- if(!p.packageScenes||n>p.packageScenes)p.packageScenes=n;update(p);
+ });
  res.status(202).json({ok:true});
 }));
-// one scene's video: uses a prepaid credit; a failure the provider did not bill gives the credit back
+// one scene's video: the balance must cover this clip; a resumed Kie task is polled again without a new charge
 async function makeSceneVideo(p,i){
  const s=p.scenes[i];if(s.video&&!s.kieTasks?.video)return;
- const resuming=!!s.kieTasks?.video;
- if(!resuming){if(!(s.videoCredits>0))throw new PayError(t(L(p),'scenePay',{n:i+1}));s.videoCredits--;}
- const before=p.spendUsd||0;update(p);
+ if(!s.kieTasks?.video)needBalance(p,t(L(p),'bScene',{n:i+1}),videoCredits(seedanceSeconds(s.duration||5)));
  try{s.video=await createSceneVideo(p,i,LAUNCH_VIDEO,s.duration||5);s.status='video-ready';s.error=null;}
- catch(e){if(!s.kieTasks?.video&&(p.spendUsd||0)<=before)s.videoCredits=(s.videoCredits||0)+1;s.error=e.message;throw e;}
+ catch(e){s.error=e.message;throw e;}
  finally{update(p);}
 }
-// step 5: Launch — scene images are the storyboard panels (cut by the browser); videos are already paid
+// step 5: Launch — scene images are the storyboard panels (cut by the browser); each clip is billed as it finishes
 async function runLaunch(p){
  const n=p.scenes.length,step=(current,stage)=>{p.batchProgress={...p.batchProgress,current,stage};update(p);};
  p.batchProgress={done:p.scenes.filter(s=>s.video).length,total:n+1,current:t(L(p),'pPrep'),stage:'videos'};update(p);
@@ -215,22 +207,24 @@ async function runLaunch(p){
  if(await ffmpegAvailable()){step(t(L(p),'pMerge'),'render');p.render=await renderProject(p,p.editing);p.batchProgress.done++;step(t(L(p),'pDone'),'done');}
  else{p.batchProgress.done++;step(t(L(p),'pDoneNoFfmpeg'),'done');}
 }
-app.post('/api/projects/:id/launch',find,(req,res)=>{
+app.post('/api/projects/:id/launch',find,(req,res)=>guard(res,()=>{
  const p=req.project;const err=needKeys(L(p));if(err)return fail(res,err);
- if(!p.scenes.length||!p.packageScenes)return fail(res,t(L(p),'storyboardFirst'));
+ if(!p.scenes.length||!p.sheets?.length)return fail(res,t(L(p),'storyboardFirst'));
  if(busyJob(p))return fail(res,t(L(p),'making'),409);
+ needBalance(p,t(L(p),'bVideos',{n:p.scenes.filter(s=>!s.video).length}),videosLeft(p));
  startJob(p,'launch',()=>runLaunch(p));res.status(202).json({ok:true});
-});
-// redo one scene's video (prepaid per scene)
+}));
+// redo one scene's video (billed by usage)
 app.post('/api/projects/:id/simple/scene/:index',find,(req,res)=>guard(res,()=>{
  const p=req.project,i=Number(req.params.index),scene=p.scenes[i];const err=needKeys(L(p));if(err)return fail(res,err);
  if(!scene)return fail(res,t(L(p),'noScene'),404);if(busyJob(p))return fail(res,t(L(p),'busy'),409);
  const hint=String(req.body?.hint||'').trim().slice(0,300);
- const e=charge(p,`video-${i}`,t(L(p),'bSceneRedoN',{n:i+1}),prices(p).sceneRedo.price);scene.videoCredits=(scene.videoCredits||0)+1;
+ needBalance(p,t(L(p),'bSceneRedoN',{n:i+1}),videoCredits(seedanceSeconds(scene.duration||5)));
  startJob(p,`video-${i}`,async()=>{
-  const prev=scene.videoPrompt,old=scene.video;if(hint)scene.videoPrompt=`${prev}\nREVISION REQUEST: ${hint}`;scene.video=null;
+  const prev=scene.videoPrompt,old=scene.video;if(hint)scene.videoPrompt=`${prev}
+REVISION REQUEST: ${hint}`;scene.video=null;
   try{await makeSceneVideo(p,i);}
-  catch(err){if(!scene.video)scene.video=old;if(scene.videoCredits>0){scene.videoCredits--;refund(p,e,t(L(p),'refundWhy'));}update(p);throw err;}
+  catch(err){if(!scene.video)scene.video=old;update(p);throw err;}
   finally{scene.videoPrompt=prev;}
   // the last missing scene is in: finish the launch that stopped on it
   const complete=p.scenes.every(s=>s.video);

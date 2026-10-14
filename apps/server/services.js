@@ -14,9 +14,12 @@ const ai=()=>{
 
 // the server registers its save function so paid task ids are on disk the moment they exist
 let persist=()=>{};export const setPersist=fn=>{persist=fn;};
-// actual provider spend per project, from the providers' own usage reports (checked against the prepaid price)
-export function spend(project,usd,what){
+// the server registers how a recorded spend is billed (credits taken from the wallet)
+let onSpend=()=>{};export const setSpendHook=fn=>{onSpend=fn;};
+// actual provider spend per project, from the providers' own usage reports; each one is billed right away
+export function spend(project,usd,what,detail={}){
  if(!project||!(usd>0))return;
+ onSpend(project,usd,what,detail);
  project.spendUsd=+((project.spendUsd||0)+usd).toFixed(6);
  (project.spendLog??=[]).push({what,usd:+usd.toFixed(6),at:new Date().toISOString()});
  if(project.spendLog.length>300)project.spendLog.splice(0,project.spendLog.length-300);
@@ -28,7 +31,7 @@ async function deepseekJSON(messages,maxTokens=5000,meter){
  try {
   const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',signal:abort.signal,headers:{'Content-Type':'application/json','Authorization':`Bearer ${process.env.DEEPSEEK_API_KEY}`},body:JSON.stringify({model:process.env.DEEPSEEK_MODEL||'deepseek-flash',messages,response_format:{type:'json_object'},max_tokens:maxTokens,temperature:0.8,stream:false,thinking:{type:'disabled'}})});
   const obj=await r.json();if(!r.ok) throw new Error(obj?.error?.message||`DeepSeek HTTP ${r.status}`);
-  meter?.(deepseekUsd(obj.usage)); // tokens are billed even if the JSON below turns out unusable
+  meter?.(deepseekUsd(obj.usage),obj.usage); // tokens are billed even if the JSON below turns out unusable
   const body=obj.choices?.[0]?.message?.content;if(!body)throw new Error('DeepSeek가 빈 응답을 반환했습니다.');
   try{return JSON.parse(body);}catch{const m=body.match(/\{[\s\S]*\}/);if(m)return JSON.parse(m[0]);throw new Error('DeepSeek JSON 파싱 실패');}
  } finally{clearTimeout(timer);}
@@ -54,7 +57,7 @@ function capTotal(scenes,max){
 // then writes image/video prompts 10 scenes at a time (pass 2); output caps match the worst case the price assumes
 export async function writeSimpleStory(project,onStep=()=>{}){
  const count=Math.max(3,Math.min(30,Number(project.sceneCount||10)));
- const meter=usd=>spend(project,usd,'deepseek');
+ const meter=(usd,u)=>spend(project,usd,'deepseek',{tokens:(u?.prompt_tokens||0)+(u?.completion_tokens||0)});
  const lang=langOf(project.lang);
  onStep('pRefine');
  const fixed=project.characters?.length?project.characters:null;
@@ -81,7 +84,7 @@ export async function writeSimpleStory(project,onStep=()=>{}){
 // character step: DeepSeek designs (or revises) the cast, then one cheap reference image is drawn (Z-Image)
 export async function designCharacter(project,{description='',feedback=''}={}){
  const prev=project.characters?.length?{characters:project.characters,styleBible:project.styleBible}:null;
- const out=await deepseekJSON([{role:'system',content:characterSystem},{role:'user',content:characterBrief(project,description,feedback,prev)}],DS_MAX.character,usd=>spend(project,usd,'deepseek'));
+ const out=await deepseekJSON([{role:'system',content:characterSystem},{role:'user',content:characterBrief(project,description,feedback,prev)}],DS_MAX.character,(usd,u)=>spend(project,usd,'deepseek',{tokens:(u?.prompt_tokens||0)+(u?.completion_tokens||0)}));
  const characters=(out.characters||[]).slice(0,2).map((c,i)=>({id:c.id||`c${i+1}`,name:c.name||`Character ${i+1}`,appearance:c.appearance||'',wardrobe:c.wardrobe||'',palette:c.palette||''}));
  if(!characters.length)throw new Error(t(langOf(project.lang),'characterFail'));
  return {characters,styleBible:String(out.styleBible||project.styleBible||project.style||''),characterSummary:String(out.summary||out.summaryKo||'')};
@@ -191,7 +194,7 @@ async function kieTask(project,model,input,holder,key,label){
   if(Date.now()-started>300000)throw new Error(t(langOf(project.lang),'timeout',{what:t(langOf(project.lang),label)}));
  }
  delete holder.kieTasks[key];
- spend(project,Number(info.creditsConsumed||0)*KIE_USD_PER_CREDIT,`kie:${model}`);
+ spend(project,Number(info.creditsConsumed||0)*KIE_USD_PER_CREDIT,`kie:${model}`,{kieCredits:Number(info.creditsConsumed||0)});
  if(info.state==='fail')throw new Error(t(langOf(project.lang),'failed',{what:t(langOf(project.lang),label),why:info.failMsg||info.failCode||'unknown'}));
  let url;try{url=JSON.parse(info.resultJson||'{}').resultUrls?.[0];}catch{}
  if(!url)throw new Error(t(langOf(project.lang),'failed',{what:t(langOf(project.lang),label),why:'no result URL'}));
